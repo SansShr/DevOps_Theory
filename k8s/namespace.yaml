@@ -1,0 +1,9 @@
+---
+# CAMATIS Kubernetes Namespace
+# All CAMATIS workloads (backend, Prometheus, Grafana) live here.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: camatis
+  labels:
+    app.kubernetes.io/part-of: camatis
