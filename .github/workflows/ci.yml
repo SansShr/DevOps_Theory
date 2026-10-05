@@ -136,7 +136,15 @@ jobs:
         if: always()
         run: docker rm -f camatis-ci || true
 
-      # ── GHCR push — only on push events (not untrusted PRs) ─────────────────
+      # ── GHCR publish — only on push events (not untrusted PRs) ────────────────
+      # buildx is set up separately from the plain `docker build` above so the
+      # smoke-test flow is unaffected.  build-push-action builds and pushes in
+      # one atomic operation, which avoids the "unknown blob" error that occurs
+      # when a daemon-built image is pushed via a separate `docker push` call.
+      - name: Set up Docker Buildx
+        if: github.event_name == 'push'
+        uses: docker/setup-buildx-action@v3
+
       - name: Log in to GitHub Container Registry
         if: github.event_name == 'push'
         uses: docker/login-action@v3
@@ -145,10 +153,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Push image to GHCR (SHA tag + latest)
+      - name: Build and push image to GHCR (SHA tag + latest)
         if: github.event_name == 'push'
-        run: |
-          docker push "${{ steps.img.outputs.sha_tag }}"
-          docker push "${{ steps.img.outputs.latest_tag }}"
-          echo "✓ Pushed ${{ steps.img.outputs.sha_tag }}"
-          echo "✓ Pushed ${{ steps.img.outputs.latest_tag }}"
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ steps.img.outputs.sha_tag }}
+            ${{ steps.img.outputs.latest_tag }}
