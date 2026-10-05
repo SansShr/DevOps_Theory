@@ -1,0 +1,106 @@
+---
+# CAMATIS Backend — Kubernetes Deployment
+#
+# Image      : ghcr.io/sansshr/camatis-backend:latest
+# Replicas   : 2
+# Strategy   : RollingUpdate  maxUnavailable=0  maxSurge=1
+# Probes     : readiness + liveness on GET /api/health
+#
+# ── GHCR Image Visibility ─────────────────────────────────────────────────────
+# CASE A — package is PUBLIC (recommended for academic demo):
+#   No imagePullSecret needed. Set the package to Public in:
+#   GitHub → Your Profile → Packages → camatis-backend → Package Settings → Visibility
+#
+# CASE B — package is PRIVATE:
+#   1. Create a PAT with read:packages scope in GitHub → Settings → Developer settings
+#   2. kubectl create secret docker-registry ghcr-secret \
+#        --docker-server=ghcr.io \
+#        --docker-username=<github-username> \
+#        --docker-password=<PAT> \
+#        -n camatis
+#   3. Uncomment the imagePullSecrets block below.
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: camatis-backend
+  namespace: camatis
+  labels:
+    app: camatis-backend
+    app.kubernetes.io/name: camatis-backend
+    app.kubernetes.io/part-of: camatis
+  annotations:
+    # Enables kubectl rollout history to show meaningful messages
+    kubernetes.io/change-cause: "initial deployment"
+spec:
+  replicas: 2
+
+  selector:
+    matchLabels:
+      app: camatis-backend   # must match pod template labels
+
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0   # never take a pod down before the new one is ready
+      maxSurge: 1         # allow one extra pod during the update
+
+  template:
+    metadata:
+      labels:
+        app: camatis-backend
+        app.kubernetes.io/name: camatis-backend
+    spec:
+      # ── Uncomment for CASE B (private GHCR package) ─────────────────────
+      # imagePullSecrets:
+      #   - name: ghcr-secret
+
+      containers:
+        - name: camatis-backend
+          image: ghcr.io/sansshr/camatis-backend:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8000
+              name: http
+              protocol: TCP
+
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+
+          # ── Readiness probe ────────────────────────────────────────────────
+          # Pod only receives traffic once /api/health returns 200.
+          # No ML pipeline is triggered by this probe (lazy loading ensures that).
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 8000
+            initialDelaySeconds: 10   # give uvicorn time to bind
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+            successThreshold: 1
+
+          # ── Liveness probe ─────────────────────────────────────────────────
+          # Restarts the container if /api/health stops responding.
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 8000
+            initialDelaySeconds: 20   # slightly longer — let readiness succeed first
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+
+      # Graceful termination: allow 30 s for in-flight requests to complete
+      terminationGracePeriodSeconds: 30

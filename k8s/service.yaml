@@ -1,0 +1,26 @@
+---
+# CAMATIS Backend — Kubernetes Service
+#
+# Type       : ClusterIP  (internal access only)
+# Port 8000  → targetPort 8000 on the backend pods
+#
+# Prometheus (in the same namespace) scrapes this service at
+# http://camatis-backend:8000/metrics without needing a NodePort.
+apiVersion: v1
+kind: Service
+metadata:
+  name: camatis-backend
+  namespace: camatis
+  labels:
+    app: camatis-backend
+    app.kubernetes.io/name: camatis-backend
+    app.kubernetes.io/part-of: camatis
+spec:
+  type: ClusterIP
+  selector:
+    app: camatis-backend   # matches Deployment pod template labels exactly
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+      protocol: TCP

@@ -1,0 +1,87 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# .dockerignore — CAMATIS Backend Docker build context
+#
+# Keep the context lean: include only what the API genuinely needs at runtime.
+# Large generated agent JSON files are excluded; the API handles their absence
+# gracefully (data_service reads them only if present).
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Version control ───────────────────────────────────────────────────────────
+.git/
+.gitignore
+
+# ── Python cache / bytecode ───────────────────────────────────────────────────
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+**/*.egg-info/
+*.egg
+
+# ── Virtual environments ──────────────────────────────────────────────────────
+venv/
+.venv/
+env/
+ENV/
+
+# ── Test artefacts ────────────────────────────────────────────────────────────
+tests/
+.pytest_cache/
+**/.pytest_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# ── IDE / editor files ────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── OS noise ──────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── Frontend (not served by the Python API) ───────────────────────────────────
+camatis-frontend/
+
+# ── Catboost training artefacts (not needed for inference) ───────────────────
+catboost_info/
+camatis/catboost_info/
+
+# ── Large generated output JSON files ────────────────────────────────────────
+# agent_route_details.json  ~43 MB  — generated after optimization; optional
+# conflict_resolutions.json ~14 MB  — same
+# These are produced by /api/optimize; the API starts fine without them.
+agent_route_details.json
+conflict_resolutions.json
+
+# ── Logs (ephemeral, should not bake into the image) ─────────────────────────
+**/*.log
+camatis/logs/
+
+# ── Documentation (not needed at runtime) ────────────────────────────────────
+docs/
+*.md
+LICENSE
+
+# ── Root-level scripts not needed at runtime ──────────────────────────────────
+run_camatis.py
+launch_metrics_dashboard.py
+test_setup.py
+requirements.txt
+# NOTE: camatis_requirements.txt is intentionally NOT excluded here because
+# the Dockerfile copies it during the build (pip install) phase.
+
+# ── Jupyter / notebook artefacts ─────────────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb
+
+# ── Build artefacts ───────────────────────────────────────────────────────────
+build/
+dist/
+src/
+
+# ── Camatis results (generated; not needed for API boot) ─────────────────────
+camatis/results/

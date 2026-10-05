@@ -1,0 +1,155 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# CAMATIS — CI/CD Pipeline
+#
+# Triggers : push → main   |   pull_request → main
+# Flow      :
+#   1. Checkout
+#   2. Python setup + dependency install
+#   3. Pytest (health + metrics, no ML pipeline invoked)
+#   4. Docker build
+#   5. Start container, wait for readiness
+#   6. Smoke-test  GET /api/health  (expect 200)
+#   7. Smoke-test  GET /metrics     (expect 200)
+#   8. Push image to GHCR           (push events only, not PRs)
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Permissions needed for GHCR push and code checkout
+permissions:
+  contents: read
+  packages: write
+
+env:
+  # Image path — registry name must be lowercase
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner_lc }}/camatis-backend
+
+jobs:
+  # ────────────────────────────────────────────────────────────────────────────
+  test:
+    name: Python Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install API dependencies
+        run: pip install -r backend/requirements.txt
+
+      - name: Run pytest
+        run: python -m pytest tests/test_health.py tests/test_metrics.py -v --tb=short
+
+  # ────────────────────────────────────────────────────────────────────────────
+  docker:
+    name: Docker Build & Smoke Test
+    runs-on: ubuntu-latest
+    needs: test           # only run if tests pass
+
+    # Make repository owner lowercase for the image tag
+    env:
+      OWNER_LC: ${{ github.repository_owner }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Compute the lowercase owner once; used in image tags below
+      - name: Normalise image name (lowercase owner)
+        id: img
+        run: |
+          OWNER_LC=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          echo "name=ghcr.io/${OWNER_LC}/camatis-backend" >> "$GITHUB_OUTPUT"
+          echo "sha_tag=ghcr.io/${OWNER_LC}/camatis-backend:${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          echo "latest_tag=ghcr.io/${OWNER_LC}/camatis-backend:latest" >> "$GITHUB_OUTPUT"
+
+      # Build the image (build context = repo root, as specified in Dockerfile)
+      - name: Build Docker image
+        run: |
+          docker build \
+            --tag "${{ steps.img.outputs.sha_tag }}" \
+            --tag "${{ steps.img.outputs.latest_tag }}" \
+            --tag camatis-backend:ci \
+            .
+
+      # Start container detached; mount nothing — the API starts fine without
+      # the large generated JSON files (data_service handles their absence).
+      - name: Start container
+        run: |
+          docker run -d \
+            --name camatis-ci \
+            -p 8000:8000 \
+            camatis-backend:ci
+
+      # Poll /api/health until it returns 200 (up to 60 s)
+      - name: Wait for API to become ready
+        run: |
+          echo "Waiting for /api/health to return 200..."
+          for i in $(seq 1 30); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/api/health || true)
+            if [ "$STATUS" = "200" ]; then
+              echo "✓ /api/health returned 200 after $((i * 2)) s"
+              exit 0
+            fi
+            echo "  attempt $i — got $STATUS, retrying in 2 s..."
+            sleep 2
+          done
+          echo "✗ API did not become ready within 60 s"
+          docker logs camatis-ci
+          exit 1
+
+      # Smoke test 1 — health endpoint
+      - name: Smoke test — GET /api/health
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/api/health)
+          echo "GET /api/health → HTTP $STATUS"
+          [ "$STATUS" = "200" ] || { echo "FAIL: expected 200"; exit 1; }
+
+      # Smoke test 2 — metrics endpoint
+      - name: Smoke test — GET /metrics
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/metrics)
+          echo "GET /metrics → HTTP $STATUS"
+          [ "$STATUS" = "200" ] || { echo "FAIL: expected 200"; exit 1; }
+          # Verify Prometheus text contains expected metric name
+          BODY=$(curl -s http://localhost:8000/metrics)
+          echo "$BODY" | grep -q "http_requests_total" || { echo "FAIL: http_requests_total missing"; exit 1; }
+          echo "✓ /metrics contains http_requests_total"
+
+      - name: Show container logs (always, for debugging)
+        if: always()
+        run: docker logs camatis-ci
+
+      - name: Stop and remove container
+        if: always()
+        run: docker rm -f camatis-ci || true
+
+      # ── GHCR push — only on push events (not untrusted PRs) ─────────────────
+      - name: Log in to GitHub Container Registry
+        if: github.event_name == 'push'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push image to GHCR (SHA tag + latest)
+        if: github.event_name == 'push'
+        run: |
+          docker push "${{ steps.img.outputs.sha_tag }}"
+          docker push "${{ steps.img.outputs.latest_tag }}"
+          echo "✓ Pushed ${{ steps.img.outputs.sha_tag }}"
+          echo "✓ Pushed ${{ steps.img.outputs.latest_tag }}"
